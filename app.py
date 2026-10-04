@@ -12,6 +12,8 @@ from groq import (
     APIConnectionError,
     AuthenticationError,
     Groq,
+    NotFoundError,
+    PermissionDeniedError,
     RateLimitError,
 )
 
@@ -19,8 +21,8 @@ from groq import (
 # Configuration
 # ----------------------------------------------------------------------------
 MODELS = {
-    "Llama 3.3 70B (best quality)": "llama-3.3-70b-versatile",
-    "Llama 3.1 8B (fastest, higher free limits)": "llama-3.1-8b-instant",
+    "GPT-OSS 120B (best quality)": "openai/gpt-oss-120b",
+    "GPT-OSS 20B (fastest)": "openai/gpt-oss-20b",
 }
 
 STYLES = {
@@ -115,36 +117,47 @@ def secret_key():
     return os.environ.get("GROQ_API_KEY", "")
 
 
-def llm_call(api_key, system, user, model, temperature=0.7, json_mode=False, max_tokens=4096):
+def llm_call(api_key, system, user, model, temperature=0.7, json_mode=False, max_tokens=8192):
+    # json_mode is kept only so older calls still work; the prompts already ask for JSON.
     client = Groq(api_key=api_key)
-    kwargs = dict(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-    if json_mode:
-        kwargs["response_format"] = {"type": "json_object"}
-
+    # If the chosen model is unavailable, automatically try the other one.
+    candidates = [model] + [m for m in MODELS.values() if m != model]
     last_error = None
-    for attempt in range(6):
-        try:
-            resp = client.chat.completions.create(**kwargs)
-            return resp.choices[0].message.content or ""
-        except RateLimitError as e:  # free-tier limit: wait and retry
-            last_error = e
-            time.sleep(min(3 * 2 ** attempt, 40))
-        except APIConnectionError as e:
-            last_error = e
-            time.sleep(2 * (attempt + 1))
-        except AuthenticationError:
-            raise RuntimeError("Invalid Groq API key. Please check it and try again.")
-    raise RuntimeError(f"Groq is busy or unreachable right now. Last error: {last_error}")
 
+    for current in candidates:
+        kwargs = dict(
+            model=current,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        if "gpt-oss" in current:
+            # These are reasoning models; low effort is faster and uses fewer free-tier tokens.
+            kwargs["extra_body"] = {"reasoning_effort": "low"}
 
+        for attempt in range(7):
+            try:
+                resp = client.chat.completions.create(**kwargs)
+                return resp.choices[0].message.content or ""
+            except RateLimitError as e:  # free-tier limit: wait and retry
+                last_error = e
+                time.sleep(min(3 * 2 ** attempt, 40))
+            except APIConnectionError as e:
+                last_error = e
+                time.sleep(2 * (attempt + 1))
+            except AuthenticationError:
+                raise RuntimeError("Invalid Groq API key. Please check it and try again.")
+            except (NotFoundError, PermissionDeniedError) as e:
+                last_error = e
+                break  # this model isn't available to you, try the next one
+
+    raise RuntimeError(
+        "Groq could not complete the request. Check your API key, wait a minute if "
+        f"you hit rate limits, and try again. Last error: {last_error}"
+    )
 # ----------------------------------------------------------------------------
 # Text utilities
 # ----------------------------------------------------------------------------
