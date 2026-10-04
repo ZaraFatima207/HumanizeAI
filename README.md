@@ -33,7 +33,7 @@ streamlit run app.py
 4. Deploy.
 
 ## Notes
-- Uses Groq's free models. Groq's free-tier rate limits still apply.
+- Uses Groq's free GPT-OSS models (openai/gpt-oss-120b and openai/gpt-oss-20b). Groq's free-tier rate limits still apply.
 - Old `.doc` files are not supported; save as `.docx`.
 - Scanned PDFs (images) need OCR and are not supported.
 - AI detection is an estimate and should not be treated as proof of authorship.
